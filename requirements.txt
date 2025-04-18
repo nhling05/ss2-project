@@ -1,0 +1,7 @@
+numpy
+opencv-python
+pyttsx3
+pillow
+matplotlib
+ultralytics
+torch
