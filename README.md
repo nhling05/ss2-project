@@ -2,8 +2,6 @@
 
 Vision-I is an assistive technology system that uses computer vision and artificial intelligence to help visually impaired users perceive their surroundings. The system uses YOLOv8 object detection combined with text-to-speech feedback to identify objects, estimate distances, and even recognize U.S. currency denominations.
 
-![Vision-I System](https://via.placeholder.com/800x400?text=Vision-I+System)
-
 ## Features
 
 - **Real-time object detection** using YOLOv8
@@ -23,12 +21,14 @@ Vision-I is an assistive technology system that uses computer vision and artific
 ## Installation
 
 1. Clone this repository:
+
    ```bash
    git clone https://github.com/yourusername/vision-i.git
    cd vision-i
    ```
 
 2. Install the required packages:
+
    ```bash
    pip install -r requirements.txt
    ```
