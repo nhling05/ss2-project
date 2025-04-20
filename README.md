@@ -93,4 +93,4 @@ python vision_i_revised.py
 
 ## Contact
 
-For questions, suggestions, or contributions, please open an issue on GitHub or contact [your-email@example.com].
+For questions, suggestions, or contributions, please open an issue on GitHub or contact nhaaling8910@gmail.com
