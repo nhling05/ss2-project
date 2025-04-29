@@ -5,3 +5,4 @@ pillow
 matplotlib
 ultralytics
 torch
+keyboard
