@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Vision-I: Cải tiến Hệ thống Hỗ trợ Thị lực cho Người Khiếm thị (YOLOv8 Version)
-Phiên bản tự động không cần PyAudio với cải tiến hiệu suất
+Phiên bản tự động không cần PyAudio với cải tiến hiệu suất và nhận dạng tiền giấy
 """
 
 import numpy as np
@@ -27,7 +27,23 @@ ANNOUNCEMENT_COOLDOWN = 12
 MAX_OBJECTS_TO_READ = 2
 CENTER_ZONE = 0.25
 FRAME_SKIP = 2
-MAX_WARNINGS_PER_OBJECT = 2  # New constant for max warnings per object
+MAX_WARNINGS_PER_OBJECT = 2
+MONEY_CONFIDENCE_THRESHOLD = 0.45  # Ngưỡng tin cậy thấp hơn cho phát hiện tiền
+MONEY_ANNOUNCEMENT_COOLDOWN = 5    # Thời gian nghỉ ngắn hơn cho thông báo tiền
+
+# Ánh xạ tên lớp tiền giấy
+CLASS_MAPPING = {
+    'one-front': 'one',
+    'one-back': 'one',
+    'five-front': 'five',
+    'five-back': 'five',
+    'ten-front': 'ten',
+    'ten-back': 'ten',
+    'twenty-front': 'twenty',
+    'twenty-back': 'twenty',
+    'fifty-front': 'fifty',
+    'fifty-back': 'fifty'
+}
 
 # Khởi tạo bộ đọc giọng nói
 engine = pyttsx3.init()
@@ -74,16 +90,27 @@ suppressed_objects = set()  # Objects with suppressed warnings
 frame_count = 0
 
 # Tải mô hình YOLOv8
-def load_model():
+def load_models():
     try:
         print("Đang tải mô hình YOLO...")
-        model = YOLO('yolov8n.pt')
+        # Tải mô hình nhận dạng đối tượng chung
+        general_model = YOLO('yolov8n.pt')
         print("Đã tải mô hình YOLO thành công")
-        return model
+        
+        # Tải mô hình nhận dạng tiền giấy chuyên biệt
+        dollar_model_path = os.path.join('models', 'best_money.pt')
+        if os.path.exists(dollar_model_path):
+            dollar_model = YOLO(dollar_model_path)
+            print("Đã tải mô hình nhận dạng tiền thành công")
+        else:
+            print("Không tìm thấy mô hình nhận dạng tiền, sử dụng phương pháp xử lý ảnh thay thế")
+            dollar_model = None
+            
+        return general_model, dollar_model
     except Exception as e:
         print(f"Lỗi khi tải mô hình: {e}")
-        speak("Error loading model. Please check your internet connection or model installation.")
-        return None
+        speak("Error loading model. Please check your model installation.")
+        return None, None
 
 # Tính khoảng cách dựa trên kích thước hộp giới hạn
 def calculate_distance(box):
@@ -101,7 +128,7 @@ def calculate_distance(box):
     else:
         return "very far"
 
-# Phát hiện tiền giấy
+# Phát hiện tiền giấy bằng phương pháp xử lý ảnh
 def detect_dollar_bills(image):
     global last_dollar_detection_time
     current_time = time.time()
@@ -162,12 +189,70 @@ def detect_dollar_bills(image):
                     (0, 255, 0), 
                     2
                 )
+                # Sử dụng tiếng Anh để đọc giá trị tiền
                 speak(f"Detected {denomination} bill", priority=True)
                 return denomination
         return None
     except Exception as e:
         print(f"Lỗi phát hiện tiền giấy: {e}")
         return None
+
+# Phương pháp kết hợp sử dụng cả mô hình ML và xử lý ảnh
+def detect_dollars_combined(frame, dollar_model):
+    """Phương pháp kết hợp sử dụng cả mô hình ML và xử lý ảnh"""
+    detected_bills = []
+    
+    # Trước tiên thử với mô hình đã huấn luyện
+    if dollar_model is not None:
+        process_frame = cv2.resize(frame, (640, 640))
+        results = dollar_model(process_frame, conf=MONEY_CONFIDENCE_THRESHOLD)
+        
+        for result in results:
+            boxes = result.boxes
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                scale_x = frame.shape[1] / 640
+                scale_y = frame.shape[0] / 640
+                x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
+                y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
+                confidence = float(box.conf[0])
+                class_id = int(box.cls[0])
+                class_name = result.names[class_id]
+                
+                # Làm sạch tên lớp để đọc
+                denomination = class_name.split('-')[0]
+                side = "front side" if "front" in class_name else "back side"
+                
+                # Hiển thị tên tiếng Việt trên giao diện
+                bill_name_vi = class_name.replace('-front', ' mặt trước').replace('-back', ' mặt sau')
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f'{bill_name_vi}: {confidence:.2f}'
+                cv2.putText(
+                    frame, 
+                    label, 
+                    (x1, y1 - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.5, 
+                    (0, 255, 0), 
+                    2
+                )
+                
+                # Sử dụng tiếng Anh để đọc
+                bill_info = f"{denomination} dollar bill, {side}"
+                detected_bills.append((bill_info, (x1, y1, x2, y2), confidence))
+    
+    # Nếu mô hình không phát hiện gì, hãy thử phương pháp truyền thống làm dự phòng
+    if not detected_bills:
+        traditional_result = detect_dollar_bills(frame)
+        if traditional_result:
+            # Phương pháp truyền thống đã phát hiện điều gì đó
+            detected_bills.append((traditional_result, None, 0.5))
+    
+    # Phát thông báo bằng tiếng Anh cho mỗi tờ tiền được phát hiện
+    for bill_info, _, _ in detected_bills:
+        speak(f"Detected {bill_info}", priority=True)
+        
+    return detected_bills
 
 def find_droidcam():
     return get_droidcam_capture()
@@ -284,8 +369,8 @@ def keyboard_listener():
 # Hàm chính để chạy hệ thống Vision-I
 def run_vision_system():
     global is_running, system_mode, last_speech_time, frame_count
-    model = load_model()
-    if model is None:
+    general_model, dollar_model = load_models()
+    if general_model is None:
         print("Không thể tải mô hình. Đang thoát...")
         return
     if len(sys.argv) > 1 and sys.argv[1] == "--create-shortcut":
@@ -318,11 +403,62 @@ def run_vision_system():
                     break
                 continue
             display_frame = frame.copy()
+            
+            # Chế độ phát hiện tiền
             if system_mode == 1:
-                detect_dollar_bills(display_frame)
+                if dollar_model is not None:
+                    # Sử dụng mô hình nhận dạng tiền giấy đã huấn luyện
+                    process_frame = cv2.resize(frame, (640, 640))
+                    results = dollar_model(process_frame, conf=MONEY_CONFIDENCE_THRESHOLD)
+                    
+                    detected_bills = []
+                    
+                    for result in results:
+                        boxes = result.boxes
+                        for box in boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            scale_x = frame.shape[1] / 640
+                            scale_y = frame.shape[0] / 640
+                            x1, x2 = int(x1 * scale_x), int(x2 * scale_x)
+                            y1, y2 = int(y1 * scale_y), int(y2 * scale_y)
+                            confidence = float(box.conf[0])
+                            class_id = int(box.cls[0])
+                            class_name = result.names[class_id]
+                            
+                            # Làm sạch tên lớp
+                            denomination = class_name.split('-')[0]
+                            side = "front side" if "front" in class_name else "back side"
+                            
+                            # Hiển thị tên tiếng Việt trên giao diện
+                            bill_name_vi = class_name.replace('-front', ' mặt trước').replace('-back', ' mặt sau')
+                            
+                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            label = f'{bill_name_vi}: {confidence:.2f}'
+                            cv2.putText(
+                                display_frame, 
+                                label, 
+                                (x1, y1 - 10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 
+                                0.5, 
+                                (0, 255, 0), 
+                                2
+                            )
+                            
+                            # Thông báo bằng tiếng Anh
+                            bill_info = f"{denomination} dollar bill, {side}"
+                            detected_bills.append(bill_info)
+                    
+                    if detected_bills:
+                        # Thông báo các tờ tiền được phát hiện với ưu tiên cao
+                        for bill in detected_bills:
+                            speak(f"Detected {bill}", priority=True)
+                else:
+                    # Sử dụng phương pháp phát hiện tiền dựa trên xử lý ảnh hiện có làm phương án dự phòng
+                    detect_dollar_bills(display_frame)
+                
                 cv2.putText(
                     display_frame, 
-                    'Dollar detection mode', 
+                    'Chế độ phát hiện tiền', 
                     (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 
                     0.7, 
@@ -333,8 +469,10 @@ def run_vision_system():
                 if cv2.waitKey(1) & 0xFF == 27:
                     break
                 continue
+            
+            # Chế độ phát hiện đối tượng thông thường
             process_frame = cv2.resize(frame, (640, 480))
-            results = model(process_frame, imgsz=640, conf=CONFIDENCE_THRESHOLD)
+            results = general_model(process_frame, imgsz=640, conf=CONFIDENCE_THRESHOLD)
             detected_count = 0
             detected_names = []
             objects_with_distances = []
